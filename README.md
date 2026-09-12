@@ -32,6 +32,35 @@ iKuuu VPN 每日自动签到，GitHub Actions 定时执行。
 
 创建 Issue #1 可在全部签到失败时接收通知。
 
+## 保活机制（Keepalive）
+
+GitHub 会在仓库**连续 60 天没有任何提交活动**时自动停用 scheduled workflow，
+而 workflow 的运行本身**不算**仓库活动。因此一个只靠定时跑、长期不提交代码的仓库，
+定时任务会在某天静默停摆 —— 本仓库就曾因此被停用（`disabled_inactivity`）。
+
+解决办法是**自维持心跳**：签到任务在每次运行末尾检查距上一次提交的天数，
+超过阈值就提交一次 `.github/heartbeat.txt`。这样「签到 → 产生提交 → 仓库有活动 →
+定时任务不会被停 → 继续签到」形成闭环，无需任何外部服务。
+
+要点：
+
+- 心跳 step 带 `if: always()`，即使签到失败也会执行
+- 仅在距上次提交超过 `HEARTBEAT_MAX_AGE_DAYS`（默认 20 天）时才提交，日常开发时零噪音
+- 由 `GITHUB_TOKEN` 产生的提交不会触发新的 workflow 运行，无递归风险
+- 阈值远小于 60 天，留有 40 天缓冲
+
+如需调整频率，修改 `checkin.yml` 顶层 `env` 中的 `HEARTBEAT_MAX_AGE_DAYS`。
+
+### 若定时任务已被停用
+
+推送一次提交通常会自动重新激活。若没有，到
+`Actions → iKuuu Checkin` 页面点击 **Enable workflow**，或用 API：
+
+```bash
+curl -X PUT -H "Authorization: Bearer <TOKEN>" \
+  https://api.github.com/repos/rene9ate/ikuuu_sign/actions/workflows/checkin.yml/enable
+```
+
 ## 本地运行
 
 ```bash
@@ -48,3 +77,4 @@ python playwright_checkin.py
 - `.github/workflows/checkin.yml` — GitHub Actions 配置
 - `requirements.txt` — Python 依赖
 - `ikuuu_cookies.json` — Cookie 缓存（自动维护）
+- `.github/heartbeat.txt` — 保活心跳记录（自动生成，请勿手改）

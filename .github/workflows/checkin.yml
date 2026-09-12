@@ -8,6 +8,13 @@ on:
 env:
   ACCOUNTS: ${{ secrets.ACCOUNTS }}
   ISSUE_NUMBER: 1
+  # 保活：距上一次提交超过该天数才产生一次心跳提交，避免日常噪音
+  HEARTBEAT_MAX_AGE_DAYS: 20
+
+# 串行执行，避免并发运行时互相抢 push 导致心跳失败
+concurrency:
+  group: ikuuu-checkin
+  cancel-in-progress: false
 
 jobs:
   checkin:
@@ -15,6 +22,7 @@ jobs:
     permissions:
       issues: write
       actions: write
+      contents: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -119,3 +127,48 @@ jobs:
             } catch (e) {
               console.log(`评论失败: ${e.message}`);
             }
+
+      # ---------------------------------------------------------------
+      # 保活：GitHub 会在仓库连续 60 天无提交活动时停用 scheduled workflow，
+      # 而 workflow 的运行本身不算"活动"。这里让签到任务自己留下一次提交，
+      # 形成闭环，定时任务便永远不会因静默而被停用。
+      # 注意：由 GITHUB_TOKEN 产生的提交不会触发新的 workflow 运行，无递归风险。
+      # ---------------------------------------------------------------
+      - name: Heartbeat (保活)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          last_ts=$(git log -1 --format=%ct || echo 0)
+          now_ts=$(date +%s)
+          age=$(( (now_ts - last_ts) / 86400 ))
+          echo "距上次提交: ${age} 天（阈值 ${HEARTBEAT_MAX_AGE_DAYS} 天）"
+
+          if [ "$age" -lt "$HEARTBEAT_MAX_AGE_DAYS" ]; then
+            echo "仍在安全期内，跳过心跳提交"
+            exit 0
+          fi
+
+          mkdir -p .github
+          cat > .github/heartbeat.txt <<EOF
+          last_run: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          run_id: ${GITHUB_RUN_ID}
+          run_number: ${GITHUB_RUN_NUMBER}
+          EOF
+
+          git add .github/heartbeat.txt
+          if git diff --cached --quiet; then
+            echo "无内容变更，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore(heartbeat): keep Actions alive (run ${GITHUB_RUN_NUMBER})"
+
+          # 若期间已有其他提交，先变基再推，避免 non-fast-forward 失败
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "心跳已提交，60 天停用计时已重置"
