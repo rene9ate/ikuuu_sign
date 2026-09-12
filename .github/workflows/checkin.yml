@@ -4,12 +4,17 @@ on:
   schedule:
     - cron: "0 16 * * *"
   workflow_dispatch:
+    inputs:
+      heartbeat_days:
+        description: "心跳阈值天数：留空用默认值，填 0 可强制立即心跳（验证保活用）"
+        required: false
+        default: ""
 
 env:
   ACCOUNTS: ${{ secrets.ACCOUNTS }}
   ISSUE_NUMBER: 1
   # 保活：距上一次提交超过该天数才产生一次心跳提交，避免日常噪音
-  HEARTBEAT_MAX_AGE_DAYS: 20
+  HEARTBEAT_MAX_AGE_DAYS: "${{ github.event.inputs.heartbeat_days || '20' }}"
 
 # 串行执行，避免并发运行时互相抢 push 导致心跳失败
 concurrency:
